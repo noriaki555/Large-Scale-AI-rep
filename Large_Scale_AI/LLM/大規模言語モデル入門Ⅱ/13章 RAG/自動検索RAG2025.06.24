@@ -1,0 +1,151 @@
+現在のプログラミング状況　2025/06/24
+・
+
+*   本プログラムコードはすべて完了
+*   プログラムが出す結果は情報量が少ないので改良する予定
+*   リスト項目
+*   リスト項目
+
+
+
+
+
+RAGデータストアの自動構築
+
+!apt-get install git
+
+!git clone https://github.com/noriaki555/Large-Scale-AI-rep
+
+from huggingface_hub import notebook_login
+
+# Hugging Face Hubにログイン
+notebook_login()
+#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
+
+!pip install --upgrade openai
+
+import openai
+
+# 環境変数にAPIキーを設定（直接代入でも可）
+SERPAPI_KEY = "015b517bf20e4b91fac64fb822ce36f91f857d8c5a31626982c3bbe43bed7023"
+#OPENAI_API#_KEY = "YOUR_OPENAI_API_KEY"
+openai.api_key = "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"
+#SERPAPI_KEY:015b517bf20e4b91fac64fb822ce36f91f857d8c5a31626982c3bbe43bed7023
+#OPENAI_API_KEY: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
+
+!pip install serpapi
+!pip install faiss-cpu
+#!pip install faiss-gpu
+!pip install numpy
+
+!pip install --upgrade serpapi
+!pip show serpapi
+
+!pip install google-search-results
+
+!pip install transformers
+
+!pip show openai
+
+
+#RAGデータストアの自動構築
+import requests
+from bs4 import BeautifulSoup
+import openai
+from serpapi import GoogleSearch
+from transformers import RagTokenizer, RagRetriever, RagSequenceForGeneration
+import faiss
+import numpy as np
+
+# Environment variable or direct assignment for API keys
+SERPAPI_KEY = "015b517bf20e4b91fac64fb822ce36f91f857d8c5a31626982c3bbe43bed7023"
+OPENAI_API_KEY = "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"
+
+# Initialize OpenAI client with API key
+client = openai.OpenAI(api_key=OPENAI_API_KEY)
+
+def web_search(query, num_results=3):
+    params = {
+        "engine": "google",
+        "q": query,
+        "api_key": SERPAPI_KEY,
+        "num": num_results,
+    }
+    search = GoogleSearch(params)
+    results = search.get_dict()
+    return [r["link"] for r in results.get("organic_results", [])[:num_results]]
+
+def fetch_and_clean(url):
+    try:
+        response = requests.get(url, timeout=5)
+        soup = BeautifulSoup(response.text, "html.parser")
+        texts = [p.get_text() for p in soup.find_all("p")]
+        return "\n".join(texts).strip()
+    except Exception as e:
+        print(f"Error fetching {url}: {e}")
+        return ""
+
+def summarize_text(text, max_tokens=300):
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "以下の長文をRAG用に簡潔に要約してください。"},
+            {"role": "user", "content": text[:3000]},  # OpenAI token制限を考慮
+        ],
+        max_tokens=max_tokens,
+        temperature=0.3
+    )
+    return response.choices[0].message.content
+
+def get_embedding(text):
+    response = client.embeddings.create(
+        input=[text],
+        model="text-embedding-3-small"
+    )
+    return np.array(response.data[0].embedding, dtype="float32")
+
+def create_vector_store(docs):
+    dim = len(docs[0][1])
+    index = faiss.IndexFlatL2(dim)
+    texts = []
+    for text, vector in docs:
+        index.add(np.array([vector]))
+        texts.append(text)
+    return index, texts
+
+def rag_respond(query, index, texts):
+    q_vector = get_embedding(query)
+    D, I = index.search(np.array([q_vector]), k=1)
+    context = texts[I[0][0]]
+
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "以下のコンtextを元にユーザーの質問に答えてください。"},
+            {"role": "user", "content": f"Context: {context}\n\nQuestion: {query}"},
+        ],
+        temperature=0.5,
+        max_tokens=300
+    )
+    return response.choices[0].message.content
+
+# === 実行例 ===
+if __name__ == "__main__":
+    query = "最新の核融合炉の動向は？"
+    urls = web_search(query)
+    print("検索URL:", urls)
+
+    docs = []
+    for url in urls:
+        text = fetch_and_clean(url)
+        if text:
+            summary = summarize_text(text)
+            embedding = get_embedding(summary)
+            docs.append((summary, embedding))
+
+    if docs:
+        index, texts = create_vector_store(docs)
+        answer = rag_respond(query, index, texts)
+        print("\n🧠 回答:\n", answer)
+    else:
+        print("❌ 有効な情報が取得できませんでした。")
